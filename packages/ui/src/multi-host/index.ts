@@ -54,3 +54,16 @@ export {
   useTotalUnreadCount,
   useHostsWithActivity,
 } from './selectors';
+
+// -- Integration layer ------------------------------------------------------
+export {
+  createSupervisorLifecycle,
+  getSupervisorLifecycle,
+  disposeSupervisorLifecycle,
+  createRuntimeActivationAdapter,
+  createActivationWiring,
+  getActivationWiring,
+  disposeActivationWiring,
+  useSidebarIntegration,
+  SidebarIntegration,
+} from './integration';
