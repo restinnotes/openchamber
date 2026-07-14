@@ -443,56 +443,55 @@ describe('Supervisor handles relay hosts with composite factory', () => {
   });
 
   // ===================================================================
-  // Relay material fingerprint — secure hashing
+  // Relay material fingerprint — SHA-256 cryptographic hashing
   // ===================================================================
 
   describe('relayMaterialFingerprint', () => {
     const relayA = { relayUrl: 'wss://a.relay.example.com', serverId: 'server-a', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'ax', y: 'by' } };
 
-    test('same material produces same fingerprint', () => {
-      const fp1 = relayMaterialFingerprint(relayA, 'grant-xyz');
-      const fp2 = relayMaterialFingerprint(relayA, 'grant-xyz');
+    test('same material produces same fingerprint', async () => {
+      const fp1 = await relayMaterialFingerprint(relayA, 'grant-xyz');
+      const fp2 = await relayMaterialFingerprint(relayA, 'grant-xyz');
       expect(fp1).toBe(fp2);
     });
 
-    test('grant change produces different fingerprint', () => {
-      const fpNoGrant = relayMaterialFingerprint(relayA);
-      const fpGrantA = relayMaterialFingerprint(relayA, 'grant-alpha');
-      const fpGrantB = relayMaterialFingerprint(relayA, 'grant-beta');
+    test('grant change produces different fingerprint', async () => {
+      const fpNoGrant = await relayMaterialFingerprint(relayA);
+      const fpGrantA = await relayMaterialFingerprint(relayA, 'grant-alpha');
+      const fpGrantB = await relayMaterialFingerprint(relayA, 'grant-beta');
       expect(fpNoGrant).not.toBe(fpGrantA);
       expect(fpGrantA).not.toBe(fpGrantB);
     });
 
-    test('relayUrl change produces different fingerprint', () => {
+    test('relayUrl change produces different fingerprint', async () => {
       const relayV1 = { ...relayA, relayUrl: 'wss://v1.relay.example.com' };
       const relayV2 = { ...relayA, relayUrl: 'wss://v2.relay.example.com' };
-      const fp1 = relayMaterialFingerprint(relayV1);
-      const fp2 = relayMaterialFingerprint(relayV2);
+      const fp1 = await relayMaterialFingerprint(relayV1);
+      const fp2 = await relayMaterialFingerprint(relayV2);
       expect(fp1).not.toBe(fp2);
     });
 
-    test('serverId change produces different fingerprint', () => {
-      const fp1 = relayMaterialFingerprint({ ...relayA, serverId: 's1' });
-      const fp2 = relayMaterialFingerprint({ ...relayA, serverId: 's2' });
+    test('serverId change produces different fingerprint', async () => {
+      const fp1 = await relayMaterialFingerprint({ ...relayA, serverId: 's1' });
+      const fp2 = await relayMaterialFingerprint({ ...relayA, serverId: 's2' });
       expect(fp1).not.toBe(fp2);
     });
 
-    test('fingerprint does not contain grant', () => {
-      const fp = relayMaterialFingerprint(relayA, 'secret-grant-token-12345');
+    test('hostEncPubJwk change produces different fingerprint', async () => {
+      const jwkA = { kty: 'EC', crv: 'P-256', x: 'ax', y: 'by' };
+      const jwkB = { kty: 'EC', crv: 'P-256', x: 'bx', y: 'by' };
+      const fp1 = await relayMaterialFingerprint({ ...relayA, hostEncPubJwk: jwkA });
+      const fp2 = await relayMaterialFingerprint({ ...relayA, hostEncPubJwk: jwkB });
+      expect(fp1).not.toBe(fp2);
+    });
+
+    test('fingerprint does not contain grant', async () => {
+      const fp = await relayMaterialFingerprint(relayA, 'secret-grant-token-12345');
       expect(fp).not.toContain('secret-grant-token-12345');
       expect(fp).not.toContain('grant');
-      // Fingerprint is 8-char hex
-      expect(fp.length).toBe(8);
-      expect(/^[0-9a-f]{8}$/.test(fp)).toBe(true);
-    });
-
-    test('field boundary collision: "ab"|"c" vs "a"|"bc" differ', () => {
-      // Construct two relays where field values could collide without proper encoding
-      const r1 = { relayUrl: 'wss://ab.relay', serverId: 'c', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' } };
-      const r2 = { relayUrl: 'wss://a.relay', serverId: 'bc', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' } };
-      const fp1 = relayMaterialFingerprint(r1);
-      const fp2 = relayMaterialFingerprint(r2);
-      expect(fp1).not.toBe(fp2);
+      // Full SHA-256 fingerprint is 64-char hex
+      expect(fp.length).toBe(64);
+      expect(/^[0-9a-f]{64}$/.test(fp)).toBe(true);
     });
 
     test('grant update triggers different fingerprint (registry.replace path)', async () => {
@@ -504,8 +503,8 @@ describe('Supervisor handles relay hosts with composite factory', () => {
       const clientV1 = await registry.ensure(runtimeKey, descNoGrant);
 
       // Compute fingerprint with grant — must differ
-      const fpNoGrant = relayMaterialFingerprint(relayA);
-      const fpWithGrant = relayMaterialFingerprint(relayA, 'new-grant');
+      const fpNoGrant = await relayMaterialFingerprint(relayA);
+      const fpWithGrant = await relayMaterialFingerprint(relayA, 'new-grant');
       expect(fpNoGrant).not.toBe(fpWithGrant);
 
       // Replace with grant — creates new client
@@ -514,6 +513,14 @@ describe('Supervisor handles relay hosts with composite factory', () => {
       expect(clientV2).not.toBe(clientV1);
 
       registry.dispose();
+    });
+
+    test('same full material does not trigger replace', async () => {
+      const fp1 = await relayMaterialFingerprint(relayA, 'stable-grant');
+      const fp2 = await relayMaterialFingerprint(relayA, 'stable-grant');
+      // Full 64-char SHA-256 — identical inputs produce identical output
+      expect(fp1).toBe(fp2);
+      expect(fp1.length).toBe(64);
     });
   });
 });

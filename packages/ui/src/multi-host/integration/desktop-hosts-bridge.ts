@@ -258,7 +258,7 @@ async function replaceRelayClientIfNeeded(
   const material = relayMaterialStore.get(hostId);
   if (!material) return;
 
-  const newFingerprint = relayMaterialFingerprint(material, newRelayDescriptor.grant);
+  const newFingerprint = await relayMaterialFingerprint(material, newRelayDescriptor.grant);
 
   const oldFingerprint = previousRelayFingerprints.get(hostId);
   if (oldFingerprint === newFingerprint) {

@@ -1,17 +1,21 @@
 /**
  * Relay material fingerprint for change detection.
  *
- * Produces a stable, non-reversible fingerprint for relay connection material
- * (DesktopHostRelay + optional grant) so the sync bridge can detect when a
- * relay client needs replacement.
+ * Produces a stable, non-reversible SHA-256 fingerprint for relay connection
+ * material (DesktopHostRelay + optional grant) so the sync bridge can detect
+ * when a relay client needs replacement.
  *
  * Security properties:
- *   - FNV-1a 32-bit hash — deterministic, non-reversible
+ *   - SHA-256 256-bit hash — cryptographic, non-reversible
+ *   - Full 64-char hex digest used for equality comparison (no truncation)
  *   - Stable sorted-key JSON encoding — field boundary collisions impossible
  *   - No secret material logged or exposed in UI
  *   - Missing grant vs empty grant are semantically distinct states
  *
- * Coverage: relayUrl, serverId, hostEncPubJwk, grant.
+ * Coverage: relayUrl, serverId, hostEncPubJwk (trust anchor), grant.
+ *
+ * Reuses the SHA-256 and stable encoding patterns from
+ * relay-descriptor-fingerprint.ts for consistency.
  */
 
 import type { DesktopHostRelay } from '@/lib/desktopHosts';
@@ -22,8 +26,7 @@ import type { DesktopHostRelay } from '@/lib/desktopHosts';
 
 /**
  * Deterministic serialization: object keys are sorted, strings are quoted
- * via JSON.stringify, preventing field boundary collisions.  This is the
- * same encoding pattern used by relay-descriptor-fingerprint.ts.
+ * via JSON.stringify, preventing field boundary collisions.
  */
 const stableStringify = (value: Record<string, unknown>): string => {
   const keys = Object.keys(value).sort();
@@ -37,21 +40,32 @@ const stableStringify = (value: Record<string, unknown>): string => {
 };
 
 // ---------------------------------------------------------------------------
-// FNV-1a 32-bit hash
+// SHA-256 via Web Crypto (isomorphic)
 // ---------------------------------------------------------------------------
 
-/**
- * FNV-1a hash — fast, deterministic, no secret material recoverable.
- * Collision probability is negligible for the small number of relay entries
- * (typically <20).  Sufficient for change detection, not cryptographic use.
- */
-const fnv1a32 = (input: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = (hash * 0x01000193) >>> 0;
+const hexEncode = (bytes: Uint8Array): string => {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += bytes[i].toString(16).padStart(2, '0');
   }
-  return hash.toString(16).padStart(8, '0');
+  return hex;
+};
+
+/**
+ * Hash a string with SHA-256 and return the full hex-encoded digest (64 chars).
+ * Uses the Web Crypto API which is available in browsers, Electron (Node), and Bun.
+ */
+const sha256Hex = async (input: string): Promise<string> => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(input);
+  const gc = globalThis as Record<string, unknown>;
+  const cryptoObj = gc.crypto as { subtle?: SubtleCrypto } | undefined;
+  const subtle = cryptoObj?.subtle;
+  if (!subtle) {
+    throw new Error('Web Crypto API not available');
+  }
+  const hash = await subtle.digest('SHA-256', data);
+  return hexEncode(new Uint8Array(hash));
 };
 
 // ---------------------------------------------------------------------------
@@ -59,11 +73,11 @@ const fnv1a32 = (input: string): string => {
 // ---------------------------------------------------------------------------
 
 /**
- * Compute a stable, non-reversible fingerprint of relay connection material.
+ * Compute a stable, non-reversible SHA-256 fingerprint of relay connection material.
  *
  * @param relay  - The relay connection material (relayUrl, serverId, hostEncPubJwk)
  * @param grant  - Optional relay grant token (NOT persisted, one-time pairing artifact)
- * @returns      - 8-char hex fingerprint (32 bits)
+ * @returns      - Promise resolving to 64-char hex SHA-256 digest
  *
  * Semantic rules:
  *   - grant=undefined (steady-state) and grant="" (empty) are BOTH serialized
@@ -72,15 +86,28 @@ const fnv1a32 = (input: string): string => {
  *   - grant="token" is serialized as "token" — any non-empty grant produces
  *     a different fingerprint from the no-grant state.
  *
+ * Comparison uses the FULL 64-char digest — no truncation for equality.
+ * Debug display should truncate to first 8 chars via safeFingerprintDebug().
+ *
  * Fingerprint is NOT logged, NOT exposed in UI, and does NOT contain
  * recoverable grant material.
  */
-export function relayMaterialFingerprint(relay: DesktopHostRelay, grant?: string): string {
+export async function relayMaterialFingerprint(
+  relay: DesktopHostRelay,
+  grant?: string,
+): Promise<string> {
   const material = stableStringify({
     relayUrl: relay.relayUrl,
     serverId: relay.serverId,
     hostEncPubJwk: relay.hostEncPubJwk,
     grant: grant ?? '',
   });
-  return fnv1a32(material);
+  return sha256Hex(material);
 }
+
+/**
+ * Safe debug representation of a fingerprint.
+ * Only returns the first 8 hex chars to avoid leaking material.
+ */
+export const safeFingerprintDebug = (fingerprint: string): string =>
+  fingerprint.slice(0, 8);
