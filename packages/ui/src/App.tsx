@@ -44,6 +44,7 @@ import { ConfigUpdateOverlay } from '@/components/ui/ConfigUpdateOverlay';
 import { AboutDialog } from '@/components/ui/AboutDialog';
 import { RuntimeAPIProvider } from '@/contexts/RuntimeAPIProvider';
 import { registerRuntimeAPIs } from '@/contexts/runtimeAPIRegistry';
+import { MultiHostIntegrationProvider } from '@/multi-host/integration';
 import { useUIStore } from '@/stores/useUIStore';
 import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { useFeatureFlagsStore } from '@/stores/useFeatureFlagsStore';
@@ -894,15 +895,17 @@ function App({ apis }: AppProps) {
       <ErrorBoundary>
         <SyncProvider key={runtimeEndpointEpoch} sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''}>
           <RuntimeAPIProvider apis={apis}>
-            <TooltipProvider delayDuration={300} skipDelayDuration={150}>
-              <div className="h-full text-foreground bg-background">
-                <EmbeddedSessionChatContent
-                  embeddedSessionChat={embeddedSessionChat}
-                  isVSCodeRuntime={isVSCodeRuntime}
-                  embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled}
-                />
-              </div>
-            </TooltipProvider>
+            <MultiHostIntegrationProvider>
+              <TooltipProvider delayDuration={300} skipDelayDuration={150}>
+                <div className="h-full text-foreground bg-background">
+                  <EmbeddedSessionChatContent
+                    embeddedSessionChat={embeddedSessionChat}
+                    isVSCodeRuntime={isVSCodeRuntime}
+                    embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled}
+                  />
+                </div>
+              </TooltipProvider>
+            </MultiHostIntegrationProvider>
           </RuntimeAPIProvider>
         </SyncProvider>
       </ErrorBoundary>
@@ -937,25 +940,27 @@ function App({ apis }: AppProps) {
     <ErrorBoundary>
       <SyncProvider key={runtimeEndpointEpoch} sdk={opencodeClient.getSdkClient()} directory={currentDirectory || ''}>
         <RuntimeAPIProvider apis={apis}>
-          <FireworksProvider>
-              <TooltipProvider delayDuration={300} skipDelayDuration={150}>
-                <div className={isDesktopRuntime ? 'h-full text-foreground bg-transparent' : 'h-full text-foreground bg-background'}>
-                  <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
-                  <OpenCodeUpdateToast />
-                  <MainLayout />
-                  <Toaster />
-                  {!isBootShell && (
-                    <>
-                      <ConfigUpdateOverlay />
-                      <AboutDialogWrapper />
-                      {showMemoryDebug && (
-                        <MemoryDebugPanel onClose={() => setShowMemoryDebug(false)} />
-                      )}
-                    </>
-                  )}
-                </div>
-              </TooltipProvider>
-          </FireworksProvider>
+          <MultiHostIntegrationProvider>
+            <FireworksProvider>
+                <TooltipProvider delayDuration={300} skipDelayDuration={150}>
+                  <div className={isDesktopRuntime ? 'h-full text-foreground bg-transparent' : 'h-full text-foreground bg-background'}>
+                    <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
+                    <OpenCodeUpdateToast />
+                    <MainLayout />
+                    <Toaster />
+                    {!isBootShell && (
+                      <>
+                        <ConfigUpdateOverlay />
+                        <AboutDialogWrapper />
+                        {showMemoryDebug && (
+                          <MemoryDebugPanel onClose={() => setShowMemoryDebug(false)} />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </TooltipProvider>
+            </FireworksProvider>
+          </MultiHostIntegrationProvider>
         </RuntimeAPIProvider>
       </SyncProvider>
     </ErrorBoundary>

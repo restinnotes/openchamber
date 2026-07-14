@@ -1,6 +1,7 @@
 import React from 'react';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 import { SessionSidebar } from '@/components/session/SessionSidebar';
+import { SessionSidebarWithMultiHost } from '@/components/session/SessionSidebarWithMultiHost';
 import { SessionDialogs } from '@/components/session/SessionDialogs';
 import { ChatView } from '@/components/views/ChatView';
 import { useSessionUIStore } from '@/sync/session-ui-store';
@@ -560,11 +561,13 @@ export const VSCodeLayout: React.FC = () => {
             className={cn('relative h-full border-r border-border overflow-hidden flex-shrink-0', isResizingExpandedSidebar && 'select-none')}
             style={{ width: expandedSidebarWidth, minWidth: expandedSidebarWidth, maxWidth: expandedSidebarWidth }}
           >
-            <SessionSidebar
-              mobileVariant
-              allowReselect
-              hideDirectoryControls
-            />
+            <SessionSidebarWithMultiHost>
+              <SessionSidebar
+                mobileVariant
+                allowReselect
+                hideDirectoryControls
+              />
+            </SessionSidebarWithMultiHost>
             <div
               className={cn(
                 'absolute right-0 top-0 z-20 h-full w-[3px] cursor-col-resize transition-colors hover:bg-[var(--interactive-border)]/80',
@@ -606,12 +609,14 @@ export const VSCodeLayout: React.FC = () => {
                 onArchiveAll={handleArchiveAll}
               />
               <div className="flex-1 overflow-hidden">
-                <SessionSidebar
-                  mobileVariant
-                  allowReselect
-                  onSessionSelected={() => setCurrentView('chat')}
-                  hideDirectoryControls
-                />
+                <SessionSidebarWithMultiHost>
+                  <SessionSidebar
+                    mobileVariant
+                    allowReselect
+                    onSessionSelected={() => setCurrentView('chat')}
+                    hideDirectoryControls
+                  />
+                </SessionSidebarWithMultiHost>
               </div>
             </div>
           ) : null}

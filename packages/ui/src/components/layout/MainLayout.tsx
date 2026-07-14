@@ -13,6 +13,7 @@ import { CommandPalette } from '../ui/CommandPalette';
 import { HelpDialog } from '../ui/HelpDialog';
 import { OpenCodeStatusDialog } from '../ui/OpenCodeStatusDialog';
 import { SessionSidebar } from '@/components/session/SessionSidebar';
+import { SessionSidebarWithMultiHost } from '@/components/session/SessionSidebarWithMultiHost';
 import { SessionDialogs } from '@/components/session/SessionDialogs';
 import { DiffWorkerProvider } from '@/contexts/DiffWorkerProvider';
 import { MultiRunLauncher } from '@/components/multirun';
@@ -478,7 +479,9 @@ export const MainLayout: React.FC = () => {
                                 aria-hidden={!mobileLeftDrawerOpen}
                             >
                                 <ErrorBoundary>
-                                    <SessionSidebar mobileVariant />
+                                    <SessionSidebarWithMultiHost>
+                                        <SessionSidebar mobileVariant />
+                                    </SessionSidebarWithMultiHost>
                                 </ErrorBoundary>
                             </motion.div>
                             {mobileRightDrawerVisible && (
@@ -518,7 +521,9 @@ export const MainLayout: React.FC = () => {
                             className="border-border/50"
                             topBar={<SidebarTopBar />}
                         >
-                            <SessionSidebar />
+                            <SessionSidebarWithMultiHost>
+                                <SessionSidebar />
+                            </SessionSidebarWithMultiHost>
                         </Sidebar>
                         <div className="relative flex flex-1 min-w-0 flex-col overflow-hidden bg-background" data-page-scroll-lock="true">
                             <Header />
