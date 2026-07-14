@@ -2,6 +2,7 @@ import { refreshRuntimeUrlAuthToken, setRuntimeBearerToken, setRuntimeExtraHeade
 import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 import {
   activateRelayTunnel,
+  activateRelayTunnelAsync,
   deactivateActiveRelayTunnel,
   getActiveRelayTunnel,
   setRelayTunnelRegistry,
@@ -10,7 +11,13 @@ import {
 } from '@/lib/relay/runtime-tunnel';
 import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 
-export { getActiveRelayTunnel, setRelayTunnelRegistry, disposeRelayTunnels };
+export {
+  getActiveRelayTunnel,
+  setRelayTunnelRegistry,
+  disposeRelayTunnels,
+  activateRelayTunnelAsync,
+  type RelayRuntimeDescriptor,
+};
 
 export type RuntimeEndpointChangedDetail = {
   apiBaseUrl: string;
@@ -145,4 +152,53 @@ export const subscribeRuntimeEndpointChanged = (callback: (detail: RuntimeEndpoi
   };
   window.addEventListener(RUNTIME_ENDPOINT_CHANGED_EVENT, listener);
   return () => window.removeEventListener(RUNTIME_ENDPOINT_CHANGED_EVENT, listener);
+};
+
+/**
+ * Async variant of switchRuntimeEndpoint — for multi-host relay paths where
+ * the registry needs to `await ensure()` before the client is ready.
+ *
+ * When a relay descriptor with a runtimeKey is provided, this awaits the
+ * registry ensure and propagates activation failure to the caller.
+ * Non-relay calls fall through to the sync path.
+ */
+export const switchRuntimeEndpointAsync = async (options: { apiBaseUrl: string; clientToken?: string | null; runtimeKey?: string | null; requestHeaders?: Record<string, string> | null; relay?: RelayRuntimeDescriptor | null }): Promise<void> => {
+  const apiBaseUrl = options.apiBaseUrl.trim();
+  const previousApiBaseUrl = getRuntimeApiBaseUrl();
+  const previousRuntimeKey = getRuntimeKey();
+  const runtimeKey = options.runtimeKey?.trim() || normalizeRuntimeUrlKey(apiBaseUrl);
+  activeApiBaseUrl = apiBaseUrl;
+  activeRuntimeKey = runtimeKey;
+  if (typeof window !== 'undefined') {
+    const runtimeWindow = window as typeof window & {
+      __OPENCHAMBER_API_BASE_URL__?: string;
+      __OPENCHAMBER_CLIENT_TOKEN__?: string;
+      __OPENCHAMBER_RUNTIME_HEADERS__?: Record<string, string>;
+    };
+    setWindowRuntimeValue(runtimeWindow, '__OPENCHAMBER_API_BASE_URL__', apiBaseUrl);
+    setWindowRuntimeValue(runtimeWindow, '__OPENCHAMBER_CLIENT_TOKEN__', options.clientToken || undefined);
+    setWindowRuntimeValue(runtimeWindow, '__OPENCHAMBER_RUNTIME_HEADERS__', options.requestHeaders || undefined);
+  }
+  configureRuntimeUrlResolver({ apiBaseUrl, realtimeBaseUrl: apiBaseUrl });
+  setRuntimeExtraHeaders(options.requestHeaders || null);
+  setRuntimeBearerToken(options.clientToken || null);
+  // Relay mode routes runtime HTTP/WS through an E2EE tunnel instead of the
+  // network. Activate the tunnel BEFORE minting the url token, since the mint
+  // itself rides the tunnel (runtimeFetch -> tunnel.fetch).
+  if (options.relay) {
+    const descriptor: RelayRuntimeDescriptor = {
+      ...options.relay,
+      ...(runtimeKey ? { runtimeKey: toRuntimeKey(runtimeKey) } : {}),
+    };
+    // Async path: await registry.ensure() — activation failure propagates.
+    await activateRelayTunnelAsync(descriptor);
+  } else {
+    deactivateActiveRelayTunnel();
+  }
+  void refreshRuntimeUrlAuthToken(apiBaseUrl).catch(() => {});
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<RuntimeEndpointChangedDetail>(RUNTIME_ENDPOINT_CHANGED_EVENT, {
+      detail: { apiBaseUrl, previousApiBaseUrl, runtimeKey, previousRuntimeKey },
+    }));
+  }
 };

@@ -11,21 +11,30 @@
  *   D. deactivate doesn't close registry client
  *   E. host deletion closes client
  *   F. descriptor replace
+ *   G. activateRelayTunnelAsync (async activation)
+ *   H. grant chain (grant changes trigger fingerprint diff)
+ *   I. fingerprint covers grant field
+ *   J. lifecycle ownership (close vs deactivate)
+ *   K. legacy alias safety
+ *   L. adoptRelayTunnel ownership
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createRelayTunnelRegistry } from '../multi-runtime/relay-tunnel-registry';
+import { computeDescriptorFingerprint } from '../multi-runtime/relay-descriptor-fingerprint';
 import { toRuntimeKey } from '../multi-runtime/types';
 import type { RelayRuntimeDescriptor } from '../multi-runtime/types';
 import type { RelayTunnelClient } from '../tunnel-client';
 import {
   activateRelayTunnel,
+  activateRelayTunnelAsync,
   deactivateActiveRelayTunnel,
   getActiveRelayTunnel,
   setRelayTunnelRegistry,
   disposeRelayTunnels,
   adoptRelayTunnel,
   closeRelayTunnelForRuntime,
+  closeActiveRelayTunnel,
 } from '../runtime-tunnel';
 
 // ---------------------------------------------------------------------------
@@ -34,15 +43,16 @@ import {
 
 let factoryCalls: Map<string, number> = new Map();
 
-const createMockClient = (id: string): RelayTunnelClient => {
+const createMockClient = (id: string): RelayTunnelClient & { isClosed: boolean } => {
   let closed = false;
-  return {
+  const client = {
     fetch: async () => new Response(),
     subscribeStatus: () => () => {},
     close: () => { closed = true; },
     get isClosed() { return closed; },
-    get clientId() { return id; },
-  } as unknown as RelayTunnelClient;
+    clientId: id,
+  };
+  return client as unknown as RelayTunnelClient & { isClosed: boolean };
 };
 
 const createCountingFactory = () => {
@@ -353,6 +363,262 @@ describe('runtime-tunnel registry wiring', () => {
 
       // B untouched
       expect(registry.get(keyB)).toBe(clientB);
+    });
+  });
+
+  // ===================================================================
+  // activateRelayTunnelAsync — async activation
+  // ===================================================================
+
+  describe('activateRelayTunnelAsync', () => {
+    test('awaits registry.ensure and returns client (runtime-first)', async () => {
+      const runtimeKey = toRuntimeKey('host_a');
+      const descriptor = makeDescriptor('server-a');
+
+      const client = await activateRelayTunnelAsync({ ...descriptor, runtimeKey });
+
+      expect(client).not.toBeNull();
+      expect(client).toBe(registry.get(runtimeKey));
+      expect(getActiveRelayTunnel()).toBe(client);
+      expect(factoryCalls.get('server-a')).toBe(1);
+    });
+
+    test('awaits registry.ensure and returns client (monitor-first)', async () => {
+      const runtimeKey = toRuntimeKey('host_b');
+      const descriptor = makeDescriptor('server-b');
+
+      // Monitor creates first
+      const monitorClient = await registry.ensure(runtimeKey, descriptor);
+
+      // Async activation returns same client
+      const client = await activateRelayTunnelAsync({ ...descriptor, runtimeKey });
+
+      expect(client).toBe(monitorClient);
+      expect(getActiveRelayTunnel()).toBe(client);
+      expect(factoryCalls.get('server-b')).toBe(1);
+    });
+
+    test('same descriptor is a no-op (returns cached client)', async () => {
+      const runtimeKey = toRuntimeKey('host_c');
+      const descriptor = makeDescriptor('server-c');
+
+      const clientA = await activateRelayTunnelAsync({ ...descriptor, runtimeKey });
+      const clientB = await activateRelayTunnelAsync({ ...descriptor, runtimeKey });
+
+      expect(clientA).toBe(clientB);
+      expect(factoryCalls.get('server-c')).toBe(1);
+    });
+
+    test('different descriptor creates new client', async () => {
+      const runtimeKey = toRuntimeKey('host_d');
+      const descV1 = makeDescriptor('server-d', { relayUrl: 'wss://v1.relay.example.com' });
+      const descV2 = makeDescriptor('server-d', { relayUrl: 'wss://v2.relay.example.com' });
+
+      const clientV1 = await activateRelayTunnelAsync({ ...descV1, runtimeKey });
+      const clientV2 = await activateRelayTunnelAsync({ ...descV2, runtimeKey });
+
+      expect(clientV1).not.toBe(clientV2);
+      expect(factoryCalls.get('server-d')).toBe(2);
+    });
+
+    test('registry failure propagates to caller', async () => {
+      const failingRegistry = createRelayTunnelRegistry({
+        createClient: () => { throw new Error('connection refused'); },
+      });
+      setRelayTunnelRegistry(failingRegistry);
+
+      const runtimeKey = toRuntimeKey('host_e');
+      const descriptor = makeDescriptor('server-e');
+
+      await expect(activateRelayTunnelAsync({ ...descriptor, runtimeKey }))
+        .rejects.toThrow('connection refused');
+
+      // Restore original registry
+      setRelayTunnelRegistry(registry);
+      await failingRegistry.dispose();
+    });
+  });
+
+  // ===================================================================
+  // Grant chain — grant changes trigger fingerprint diff
+  // ===================================================================
+
+  describe('grant chain', () => {
+    test('grant change triggers registry replace', async () => {
+      const runtimeKey = toRuntimeKey('host_g');
+      const descNoGrant = makeDescriptor('server-g');
+      const descWithGrant = makeDescriptor('server-g', { grant: 'pairing-token-abc' });
+
+      const clientNoGrant = await registry.ensure(runtimeKey, descNoGrant);
+
+      // Grant appears → fingerprint changes → replace
+      const clientWithGrant = await registry.replace(runtimeKey, descWithGrant);
+
+      expect(clientWithGrant).not.toBe(clientNoGrant);
+      expect(factoryCalls.get('server-g')).toBe(2);
+    });
+
+    test('grant removal triggers registry replace', async () => {
+      const runtimeKey = toRuntimeKey('host_h');
+      const descWithGrant = makeDescriptor('server-h', { grant: 'pairing-token-xyz' });
+      const descNoGrant = makeDescriptor('server-h');
+
+      const clientWithGrant = await registry.ensure(runtimeKey, descWithGrant);
+
+      // Grant removed → fingerprint changes → replace
+      const clientNoGrant = await registry.replace(runtimeKey, descNoGrant);
+
+      expect(clientNoGrant).not.toBe(clientWithGrant);
+      expect(factoryCalls.get('server-h')).toBe(2);
+    });
+  });
+
+  // ===================================================================
+  // Fingerprint covers grant field
+  // ===================================================================
+
+  describe('fingerprint grant coverage', () => {
+    test('different grants produce different fingerprints', async () => {
+      const descA = makeDescriptor('server-fp', { grant: 'grant-alpha' });
+      const descB = makeDescriptor('server-fp', { grant: 'grant-beta' });
+
+      const fpA = await computeDescriptorFingerprint(descA);
+      const fpB = await computeDescriptorFingerprint(descB);
+
+      expect(fpA).not.toBe(fpB);
+    });
+
+    test('no grant vs grant produces different fingerprints', async () => {
+      const descNoGrant = makeDescriptor('server-fp2');
+      const descWithGrant = makeDescriptor('server-fp2', { grant: 'grant-xyz' });
+
+      const fpNoGrant = await computeDescriptorFingerprint(descNoGrant);
+      const fpWithGrant = await computeDescriptorFingerprint(descWithGrant);
+
+      expect(fpNoGrant).not.toBe(fpWithGrant);
+    });
+
+    test('same grant produces same fingerprint', async () => {
+      const descA = makeDescriptor('server-fp3', { grant: 'grant-same' });
+      const descB = makeDescriptor('server-fp3', { grant: 'grant-same' });
+
+      const fpA = await computeDescriptorFingerprint(descA);
+      const fpB = await computeDescriptorFingerprint(descB);
+
+      expect(fpA).toBe(fpB);
+    });
+  });
+
+  // ===================================================================
+  // Lifecycle ownership — close vs deactivate
+  // ===================================================================
+
+  describe('lifecycle ownership', () => {
+    test('deactivate clears ref, registry entry survives', async () => {
+      const runtimeKey = toRuntimeKey('host_lc');
+      const descriptor = makeDescriptor('server-lc');
+
+      const client = await registry.ensure(runtimeKey, descriptor);
+      activateRelayTunnel({ ...descriptor, runtimeKey });
+      expect(getActiveRelayTunnel()).toBe(client);
+
+      deactivateActiveRelayTunnel();
+
+      expect(getActiveRelayTunnel()).toBeNull();
+      expect(registry.has(runtimeKey)).toBe(true);
+      expect(registry.get(runtimeKey)).toBe(client);
+    });
+
+    test('closeRelayTunnelForRuntime removes entry and clears ref', async () => {
+      const runtimeKey = toRuntimeKey('host_lc2');
+      const descriptor = makeDescriptor('server-lc2');
+
+      const client = await registry.ensure(runtimeKey, descriptor);
+      activateRelayTunnel({ ...descriptor, runtimeKey });
+      expect(getActiveRelayTunnel()).toBe(client);
+
+      await closeRelayTunnelForRuntime(runtimeKey);
+
+      expect(getActiveRelayTunnel()).toBeNull();
+      expect(registry.has(runtimeKey)).toBe(false);
+      expect(registry.get(runtimeKey)).toBeFalsy();
+    });
+
+    test('disposeRelayTunnels closes all and clears ref', async () => {
+      const keyA = toRuntimeKey('host_lc3');
+      const keyB = toRuntimeKey('host_lc4');
+      const descA = makeDescriptor('server-lc3');
+      const descB = makeDescriptor('server-lc4');
+
+      await registry.ensure(keyA, descA);
+      const clientB = await registry.ensure(keyB, descB);
+      activateRelayTunnel({ ...descB, runtimeKey: keyB });
+      expect(getActiveRelayTunnel()).toBe(clientB);
+
+      await disposeRelayTunnels();
+
+      expect(getActiveRelayTunnel()).toBeNull();
+    });
+  });
+
+  // ===================================================================
+  // Legacy alias safety
+  // ===================================================================
+
+  describe('legacy alias safety', () => {
+    test('closeActiveRelayTunnel only clears reference (does not close all)', async () => {
+      const runtimeKey = toRuntimeKey('host_alias');
+      const descriptor = makeDescriptor('server-alias');
+
+      const client = await registry.ensure(runtimeKey, descriptor);
+      activateRelayTunnel({ ...descriptor, runtimeKey });
+      expect(getActiveRelayTunnel()).toBe(client);
+
+      // Using deprecated alias
+      closeActiveRelayTunnel();
+
+      // Reference cleared
+      expect(getActiveRelayTunnel()).toBeNull();
+
+      // Registry entry NOT closed (alias only clears ref)
+      expect(registry.has(runtimeKey)).toBe(true);
+      expect(registry.get(runtimeKey)).toBe(client);
+    });
+  });
+
+  // ===================================================================
+  // adoptRelayTunnel ownership transfer
+  // ===================================================================
+
+  describe('adoptRelayTunnel ownership', () => {
+    test('adopted client becomes active, previous client closed', () => {
+      const descriptor = makeDescriptor('server-adopt');
+
+      // First activation — get a mock client we can track
+      const firstClient = createMockClient('first');
+      adoptRelayTunnel(descriptor, firstClient);
+      expect(getActiveRelayTunnel()).toBe(firstClient);
+
+      // Adopt a different client (simulates probe tunnel handoff)
+      const probeClient = createMockClient('probe');
+      adoptRelayTunnel({ ...descriptor, runtimeKey: toRuntimeKey('host_adopt') }, probeClient);
+
+      // Previous client closed, new client active
+      expect(firstClient.isClosed).toBe(true);
+      expect(getActiveRelayTunnel()).toBe(probeClient);
+    });
+
+    test('adopting same client twice is a no-op', () => {
+      const descriptor = makeDescriptor('server-adopt2');
+      const client = createMockClient('stable');
+
+      adoptRelayTunnel(descriptor, client);
+      expect(getActiveRelayTunnel()).toBe(client);
+
+      // Adopt again — no double-close
+      adoptRelayTunnel(descriptor, client);
+      expect(getActiveRelayTunnel()).toBe(client);
+      expect(client.isClosed).toBe(false);
     });
   });
 });

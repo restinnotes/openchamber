@@ -58,8 +58,18 @@ export function removeRelayMaterial(hostId: HostId): void {
 /**
  * Resolve a HostDescriptor with relay transport to a full RelayRuntimeDescriptor.
  * Returns null if the host is not a relay host or material is missing.
+ *
+ * @param descriptor - The host descriptor (must have relay transport)
+ * @param grant - Optional relay grant token. NOT persisted in the material
+ *   store (one-time pairing artifact) — callers that have a fresh grant
+ *   (e.g. during pairing or candidate refresh) must pass it explicitly.
+ *   When absent, the descriptor is still valid for steady-state connections
+ *   that route by serverId alone.
  */
-export function resolveRelayDescriptor(descriptor: HostDescriptor): RelayRuntimeDescriptor | null {
+export function resolveRelayDescriptor(
+  descriptor: HostDescriptor,
+  grant?: string,
+): RelayRuntimeDescriptor | null {
   if (descriptor.transport.kind !== 'relay') return null;
   const material = relayMaterialStore.get(descriptor.hostId);
   if (!material) return null;
@@ -67,6 +77,7 @@ export function resolveRelayDescriptor(descriptor: HostDescriptor): RelayRuntime
     relayUrl: material.relayUrl,
     serverId: material.serverId,
     hostEncPubJwk: material.hostEncPubJwk,
+    ...(grant ? { grant } : {}),
   };
 }
 
@@ -77,10 +88,11 @@ export function resolveRelayDescriptor(descriptor: HostDescriptor): RelayRuntime
 /**
  * Compute a lightweight fingerprint of relay connection material.
  * Used to detect when relay material has changed between sync cycles.
+ * Includes grant so auth-material changes trigger a replace.
  * Does NOT log or expose sensitive descriptor values.
  */
-function relayMaterialFingerprint(relay: DesktopHostRelay): string {
-  return `${relay.relayUrl}|${relay.serverId}`;
+function relayMaterialFingerprint(relay: DesktopHostRelay, grant?: string): string {
+  return `${relay.relayUrl}|${relay.serverId}|${grant ?? ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,11 +268,10 @@ async function replaceRelayClientIfNeeded(
   const newRelayDescriptor = resolveRelayDescriptor(newDescriptor);
   if (!newRelayDescriptor) return;
 
-  const newFingerprint = relayMaterialFingerprint({
-    relayUrl: newRelayDescriptor.relayUrl,
-    serverId: newRelayDescriptor.serverId,
-    hostEncPubJwk: newRelayDescriptor.hostEncPubJwk,
-  });
+  const material = relayMaterialStore.get(hostId);
+  if (!material) return;
+
+  const newFingerprint = relayMaterialFingerprint(material, newRelayDescriptor.grant);
 
   const oldFingerprint = previousRelayFingerprints.get(hostId);
   if (oldFingerprint === newFingerprint) {

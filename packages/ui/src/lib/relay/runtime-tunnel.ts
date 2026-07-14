@@ -8,10 +8,13 @@
 // runtime and monitor always share the same client for the same runtimeKey.
 //
 // API contract:
-//   activateRelayTunnel  — when runtimeKey present, delegates to registry.ensure()
-//                          (async background). Sync return is best-available.
+//   activateRelayTunnelAsync — async: awaits registry.ensure(), propagates
+//     failure. For multi-host runtime switch (the primary activation path).
+//   activateRelayTunnel — sync: legacy path for non-multi-host callers
+//     (no runtimeKey). Creates standalone client. MUST NOT be used for
+//     multi-host relay activation.
 //   deactivateActiveRelayTunnel — clears active reference only, does NOT close
-//                                 the registry client (monitor may still need it).
+//     the registry client (monitor may still need it).
 //   closeRelayTunnelForRuntime  — closes a specific registry entry (host deletion).
 //   disposeRelayTunnels         — closes all registry entries (app teardown).
 
@@ -54,31 +57,31 @@ export const setRelayTunnelRegistry = (registry: RelayTunnelRegistry | null): vo
 export const getRelayTunnelRegistryRef = (): RelayTunnelRegistry | null => _registry;
 
 // ---------------------------------------------------------------------------
-// Private: background ensure
+// Private helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Fire-and-forget: call registry.ensure() in the background and update the
- * active reference when the real client resolves. The sync return of the
- * calling function uses the best-available client at call time.
+ * Check if a runtimeKey is a multi-host key (starts with 'host_').
+ * Only multi-host keys participate in registry sharing.
  */
-const backgroundEnsure = (runtimeKey: RelayRuntimeKey, descriptor: RelayRuntimeDescriptor): void => {
-  if (!_registry) return;
-  void _registry.ensure(runtimeKey, descriptor).then(
-    (client) => {
-      // Only adopt if this runtimeKey is still the active one (no switch in between).
-      if (activeRuntimeKey === runtimeKey) {
-        activeTunnel = client;
-      }
-    },
-    () => {
-      // Background ensure failed — active reference remains whatever it was.
-    },
-  );
+const isMultiHostKey = (key: string): boolean => key.startsWith('host_');
+
+/**
+ * Set the active relay references (tunnel, descriptor, key).
+ * Centralizes the state update for both sync and async paths.
+ */
+const setActiveRelay = (
+  tunnel: RelayTunnelClient | null,
+  descriptor: RelayRuntimeDescriptor | null,
+  runtimeKey: RelayRuntimeKey | null,
+): void => {
+  activeTunnel = tunnel;
+  activeDescriptor = descriptor;
+  activeRuntimeKey = runtimeKey;
 };
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API — async (primary path for multi-host)
 // ---------------------------------------------------------------------------
 
 /**
@@ -86,7 +89,7 @@ const backgroundEnsure = (runtimeKey: RelayRuntimeKey, descriptor: RelayRuntimeD
  *
  * When the registry is available and a runtimeKey is active, always reads
  * from the registry — this ensures we return the SHARED client that the
- * monitor also uses, even if the background ensure hasn't completed yet.
+ * monitor also uses.
  */
 export const getActiveRelayTunnel = (): RelayTunnelClient | null => {
   if (_registry && activeRuntimeKey) {
@@ -99,24 +102,51 @@ export const getActiveRelayTunnel = (): RelayTunnelClient | null => {
 export const isRelayModeActive = (): boolean => activeTunnel !== null;
 
 /**
- * Check if a runtimeKey is a multi-host key (starts with 'host_').
- * Only multi-host keys participate in registry sharing.
+ * Activate relay mode — async version.
+ *
+ * Awaits registry.ensure() for multi-host keys, ensuring the client is
+ * ready before the runtime switch continues. Failure propagates to the
+ * caller (Activation Controller can roll back).
+ *
+ * For multi-host relay runtime switch — the PRIMARY activation path.
  */
-const isMultiHostKey = (key: string): boolean => key.startsWith('host_');
+export const activateRelayTunnelAsync = async (
+  descriptor: RelayRuntimeDescriptor,
+): Promise<RelayTunnelClient> => {
+  // Same descriptor → no-op (reuse current).
+  if (activeTunnel && activeDescriptor && descriptorsEqual(activeDescriptor, descriptor)) {
+    return activeTunnel;
+  }
+
+  if (_registry && descriptor.runtimeKey && isMultiHostKey(descriptor.runtimeKey)) {
+    // Registry-backed path: await ensure — client is ready when we return.
+    setActiveRelay(null, descriptor, descriptor.runtimeKey);
+    const client = await _registry.ensure(descriptor.runtimeKey, descriptor);
+    // Only adopt if this runtimeKey is still the active one (no switch in between).
+    if (activeRuntimeKey === descriptor.runtimeKey) {
+      setActiveRelay(client, descriptor, descriptor.runtimeKey);
+    }
+    return client;
+  }
+
+  // Legacy path (no runtimeKey, non-multi-host key, or no registry):
+  // standalone client.
+  return activateRelayTunnel(descriptor) ?? createRelayTunnelClient(descriptor);
+};
+
+// ---------------------------------------------------------------------------
+// Public API — sync (legacy, non-multi-host only)
+// ---------------------------------------------------------------------------
 
 /**
- * Activates relay mode with the given descriptor, replacing any previous tunnel.
+ * Activate relay mode — sync version (legacy).
  *
- * When the descriptor carries a `runtimeKey` that is a multi-host key
- * (starts with 'host_') and a registry is available, the registry is the
- * SOLE owner of the client:
- *   1. If registry.get(runtimeKey) returns an existing client, reuse it.
- *   2. Otherwise, fire-and-forget registry.ensure() in the background.
- *      The sync return is null; the background ensure updates the active
- *      reference when the real client resolves.
+ * For multi-host keys, this uses a fast-path registry lookup if available,
+ * but does NOT await ensure. Use activateRelayTunnelAsync() for the
+ * primary multi-host runtime switch path.
  *
- * Non-multi-host keys (relay:..., mobile:..., etc.) fall back to standalone
- * createRelayTunnelClient(). These paths don't participate in registry sharing.
+ * Non-multi-host keys (relay:..., mobile:..., etc.) create standalone clients.
+ * These paths don't participate in registry sharing.
  */
 export const activateRelayTunnel = (descriptor: RelayRuntimeDescriptor): RelayTunnelClient | null => {
   // Same descriptor → no-op (reuse current).
@@ -125,45 +155,41 @@ export const activateRelayTunnel = (descriptor: RelayRuntimeDescriptor): RelayTu
   }
 
   if (_registry && descriptor.runtimeKey && isMultiHostKey(descriptor.runtimeKey)) {
-    // Registry-backed path: the registry is the sole owner.
-    activeDescriptor = descriptor;
-    activeRuntimeKey = descriptor.runtimeKey;
-
-    // Fast path: registry already has a client for this key.
+    // Registry-backed path: fast lookup only (no await).
+    setActiveRelay(null, descriptor, descriptor.runtimeKey);
     const existing = _registry.get(descriptor.runtimeKey);
     if (existing) {
-      activeTunnel = existing;
-      return activeTunnel;
+      setActiveRelay(existing, descriptor, descriptor.runtimeKey);
+      return existing;
     }
-
-    // Slow path: kick off background ensure. The sync return is null until
-    // the client resolves; getActiveRelayTunnel() will return the real
-    // client once background ensure completes.
-    activeTunnel = null;
-    backgroundEnsure(descriptor.runtimeKey, descriptor);
+    // No existing client — caller should use activateRelayTunnelAsync() instead.
+    // Return null to signal that the client is not ready yet.
     return null;
   }
 
   // Legacy path (no runtimeKey, non-multi-host key, or no registry):
   // standalone client.
   activeTunnel?.close();
-  activeDescriptor = descriptor;
-  activeRuntimeKey = descriptor.runtimeKey ?? null;
-  activeTunnel = createRelayTunnelClient(descriptor);
-  return activeTunnel;
+  const client = createRelayTunnelClient(descriptor);
+  setActiveRelay(client, descriptor, descriptor.runtimeKey ?? null);
+  return client;
 };
 
 /**
- * Adopts an ALREADY-OPEN tunnel client (e.g. the connect flow's probe tunnel)
- * as the active runtime tunnel. When a runtimeKey is provided, registers
- * the client in the registry so subsequent ensure() calls reuse it.
+ * Adopt an ALREADY-OPEN tunnel client (e.g. the connect flow's probe tunnel)
+ * as the active runtime tunnel.
+ *
+ * Ownership transfer: the probe caller must NOT close this client after
+ * calling adoptRelayTunnel. The active runtime (or registry) now owns it.
+ *
+ * When a runtimeKey is provided, the client becomes the active reference.
+ * The registry does NOT manage this client unless it was obtained via
+ * registry.ensure() — this is a direct adoption for probe/switch flows.
  */
 export const adoptRelayTunnel = (descriptor: RelayRuntimeDescriptor, client: RelayTunnelClient): void => {
   if (activeTunnel === client) return;
   activeTunnel?.close();
-  activeDescriptor = descriptor;
-  activeRuntimeKey = descriptor.runtimeKey ?? null;
-  activeTunnel = client;
+  setActiveRelay(client, descriptor, descriptor.runtimeKey ?? null);
 };
 
 // ---------------------------------------------------------------------------
@@ -176,9 +202,7 @@ export const adoptRelayTunnel = (descriptor: RelayRuntimeDescriptor, client: Rel
  * Used when switching away from a relay host.
  */
 export const deactivateActiveRelayTunnel = (): void => {
-  activeTunnel = null;
-  activeDescriptor = null;
-  activeRuntimeKey = null;
+  setActiveRelay(null, null, null);
 };
 
 /**
@@ -189,9 +213,7 @@ export const deactivateActiveRelayTunnel = (): void => {
  */
 export const closeRelayTunnelForRuntime = async (runtimeKey: RelayRuntimeKey): Promise<void> => {
   if (activeRuntimeKey === runtimeKey) {
-    activeTunnel = null;
-    activeDescriptor = null;
-    activeRuntimeKey = null;
+    setActiveRelay(null, null, null);
   }
   if (_registry) {
     await _registry.close(runtimeKey);
@@ -200,23 +222,26 @@ export const closeRelayTunnelForRuntime = async (runtimeKey: RelayRuntimeKey): P
 
 /**
  * Close ALL relay tunnels and dispose the registry reference.
- * Used on app teardown.
+ * Used on app teardown ONLY — never for individual host operations.
  */
 export const disposeRelayTunnels = async (): Promise<void> => {
-  activeTunnel = null;
-  activeDescriptor = null;
-  activeRuntimeKey = null;
+  setActiveRelay(null, null, null);
   if (_registry) {
     await _registry.dispose();
   }
 };
 
 // ---------------------------------------------------------------------------
-// Backwards-compat aliases (deprecated — prefer the explicit names above)
+// Backwards-compat aliases (deprecated — migrate to explicit names)
 // ---------------------------------------------------------------------------
 
-/** @deprecated Use deactivateActiveRelayTunnel */
+/** @deprecated Use deactivateActiveRelayTunnel — only clears reference. */
 export const deactivateRelayTunnel = deactivateActiveRelayTunnel;
 
-/** @deprecated Use disposeRelayTunnels */
-export const closeActiveRelayTunnel = disposeRelayTunnels;
+/**
+ * @deprecated DANGEROUS — this was mapped to disposeRelayTunnels which closes
+ * ALL hosts. Use deactivateActiveRelayTunnel (clear ref) or
+ * closeRelayTunnelForRuntime (close one host) instead.
+ * Kept only for backwards compatibility; will be removed.
+ */
+export const closeActiveRelayTunnel = deactivateActiveRelayTunnel;
