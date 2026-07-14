@@ -19,7 +19,7 @@ import {
 } from './activation-wiring';
 import { createRuntimeActivationAdapter } from './runtime-activation-adapter';
 import type { RuntimeSnapshot } from '../activation/types';
-import { getRuntimeKey, switchRuntimeEndpoint, subscribeRuntimeEndpointChanged, setRelayTunnelRegistry, disposeRelayTunnels } from '@/lib/runtime-switch';
+import { getRuntimeKey, switchRuntimeEndpoint, switchRuntimeEndpointAsync, subscribeRuntimeEndpointChanged, setRelayTunnelRegistry, disposeRelayTunnels } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -108,8 +108,20 @@ function createRealRuntimeActivationAdapter() {
           requestHeaders: host.transport.requestHeaders,
           relay: null,
         });
+      } else if (host.transport.kind === 'relay') {
+        // Relay hosts: resolve the full relay descriptor from the material
+        // store and activate the E2EE tunnel via the async path.
+        const relayDescriptor = resolveRelayDescriptor(host);
+        if (relayDescriptor) {
+          await switchRuntimeEndpointAsync({
+            apiBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
+            clientToken: undefined,
+            runtimeKey: `host_${host.hostId}`,
+            relay: relayDescriptor,
+          });
+        }
       }
-      // SSH and relay hosts are handled by their respective transport layers
+      // SSH hosts are handled by their respective transport layers
     },
 
     waitForRuntimeReady: async (host: HostDescriptor, signal: AbortSignal): Promise<void> => {
