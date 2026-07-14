@@ -7,6 +7,12 @@ import { MultiHostEmptyState } from './MultiHostEmptyState';
 import type { SessionExtraStatus } from './multi-host-sidebar-types';
 import { hostFoldKey } from './multi-host-sidebar-types';
 
+const EMPTY_HOST_IDS: HostId[] = [];
+
+// Module-level cache for hostIds selector to maintain referential stability
+let _cachedHostIdsKey = '';
+let _cachedHostIds: HostId[] = EMPTY_HOST_IDS;
+
 export type MultiHostSessionTreeProps = {
   activeHostId?: HostId;
   activeSessionId?: string;
@@ -26,7 +32,16 @@ export function MultiHostSessionTree({
 }: MultiHostSessionTreeProps) {
   // Subscribe only to host IDs — not the full state
   const hostIds = useMultiHostStore(
-    (s) => Object.keys(s.hosts) as HostId[],
+    (s) => {
+      const keys = Object.keys(s.hosts) as HostId[];
+      const key = keys.sort().join(',');
+      if (key === _cachedHostIdsKey) {
+        return _cachedHostIds;
+      }
+      _cachedHostIdsKey = key;
+      _cachedHostIds = keys;
+      return keys;
+    },
   );
 
   // Stable reference comparison for hostIds array

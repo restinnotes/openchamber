@@ -14,6 +14,7 @@ import type { HostId, HostProjectSummary, HostSessionRef, HostSessionStatus, Hos
 
 const EMPTY_SESSIONS: Record<string, HostSessionSummary> = {};
 const EMPTY_PROJECTS: HostProjectSummary[] = [];
+const EMPTY_HOST_IDS: HostId[] = [];
 
 // ---------------------------------------------------------------------------
 // Primitive selectors
@@ -151,7 +152,14 @@ export const useTotalUnreadCount = (): number =>
     return total;
   });
 
-/** Subscribe to the list of hostIds with active (non-idle) sessions. */
+/**
+ * Subscribe to the list of hostIds with active (non-idle) sessions.
+ * Uses a cache to maintain referential stability — returns the same array
+ * reference when the set of active hostIds has not changed.
+ */
+let _lastActiveHostIds: HostId[] = EMPTY_HOST_IDS;
+let _lastActiveHostIdsKey = '';
+
 export const useHostsWithActivity = (): HostId[] =>
   useMultiHostStore((s) => {
     const active: HostId[] = [];
@@ -163,5 +171,11 @@ export const useHostsWithActivity = (): HostId[] =>
         }
       }
     }
+    const key = active.sort().join(',');
+    if (key === _lastActiveHostIdsKey) {
+      return _lastActiveHostIds;
+    }
+    _lastActiveHostIdsKey = key;
+    _lastActiveHostIds = active;
     return active;
   });
