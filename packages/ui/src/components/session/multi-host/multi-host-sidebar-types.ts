@@ -11,6 +11,7 @@ import type {
   HostId,
   HostSessionRef,
   HostSessionStatus,
+  HostSessionSummary,
   HostTransport,
 } from '@/multi-host';
 

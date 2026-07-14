@@ -123,7 +123,7 @@ const createFakeAdapter = (opts: FakeAdapterOptions = {}): RuntimeActivationAdap
       fail('waitForRuntimeReady');
     },
 
-    openProjectOrDirectory: async (ref: HostSessionRef): Promise<void> => {
+    openProjectOrDirectory: async (ref: HostSessionRef, signal: AbortSignal): Promise<void> => {
       callLog.push('openProjectOrDirectory');
       fail('openProjectOrDirectory');
       if (opts.openProjectFn) await opts.openProjectFn(ref, signal);
@@ -143,7 +143,8 @@ const createFakeAdapter = (opts: FakeAdapterOptions = {}): RuntimeActivationAdap
       if (opts.selectSessionFn) await opts.selectSessionFn(ref, signal);
     },
 
-    restore: async (snap: RuntimeSnapshot): Promise<void> => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signal is required by interface but not used in this test mock
+    restore: async (snap: RuntimeSnapshot, _signal: AbortSignal): Promise<void> => {
       callLog.push('restore');
       fail('restore');
       snapshot.hostId = snap.hostId;
