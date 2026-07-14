@@ -20,6 +20,7 @@ import { closeRelayTunnelForRuntime } from '@/lib/relay/runtime-tunnel';
 import type { SupervisorLifecycle } from './supervisor-lifecycle';
 import { useMultiHostStore } from '../multi-host-store';
 import { getRelayTunnelRegistry } from './app-relay-registry';
+import { relayMaterialFingerprint } from './relay-material-fingerprint';
 
 // ---------------------------------------------------------------------------
 // Relay material store
@@ -79,20 +80,6 @@ export function resolveRelayDescriptor(
     hostEncPubJwk: material.hostEncPubJwk,
     ...(grant ? { grant } : {}),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Relay material fingerprint (for change detection)
-// ---------------------------------------------------------------------------
-
-/**
- * Compute a lightweight fingerprint of relay connection material.
- * Used to detect when relay material has changed between sync cycles.
- * Includes grant so auth-material changes trigger a replace.
- * Does NOT log or expose sensitive descriptor values.
- */
-function relayMaterialFingerprint(relay: DesktopHostRelay, grant?: string): string {
-  return `${relay.relayUrl}|${relay.serverId}|${grant ?? ''}`;
 }
 
 // ---------------------------------------------------------------------------

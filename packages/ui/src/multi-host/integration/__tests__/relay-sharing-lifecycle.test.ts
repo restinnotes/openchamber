@@ -17,6 +17,7 @@ import {
   resolveRelayDescriptor,
   desktopHostsToDescriptors,
 } from '../desktop-hosts-bridge';
+import { relayMaterialFingerprint } from '../relay-material-fingerprint';
 import { createMultiHostSupervisor } from '../../monitor/multi-host-supervisor';
 import type { HostDescriptor, HostId } from '../../types';
 import type { DesktopHost } from '@/lib/desktopHosts';
@@ -439,5 +440,80 @@ describe('Supervisor handles relay hosts with composite factory', () => {
 
     supervisor.dispose();
     failRegistry.dispose();
+  });
+
+  // ===================================================================
+  // Relay material fingerprint — secure hashing
+  // ===================================================================
+
+  describe('relayMaterialFingerprint', () => {
+    const relayA = { relayUrl: 'wss://a.relay.example.com', serverId: 'server-a', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'ax', y: 'by' } };
+
+    test('same material produces same fingerprint', () => {
+      const fp1 = relayMaterialFingerprint(relayA, 'grant-xyz');
+      const fp2 = relayMaterialFingerprint(relayA, 'grant-xyz');
+      expect(fp1).toBe(fp2);
+    });
+
+    test('grant change produces different fingerprint', () => {
+      const fpNoGrant = relayMaterialFingerprint(relayA);
+      const fpGrantA = relayMaterialFingerprint(relayA, 'grant-alpha');
+      const fpGrantB = relayMaterialFingerprint(relayA, 'grant-beta');
+      expect(fpNoGrant).not.toBe(fpGrantA);
+      expect(fpGrantA).not.toBe(fpGrantB);
+    });
+
+    test('relayUrl change produces different fingerprint', () => {
+      const relayV1 = { ...relayA, relayUrl: 'wss://v1.relay.example.com' };
+      const relayV2 = { ...relayA, relayUrl: 'wss://v2.relay.example.com' };
+      const fp1 = relayMaterialFingerprint(relayV1);
+      const fp2 = relayMaterialFingerprint(relayV2);
+      expect(fp1).not.toBe(fp2);
+    });
+
+    test('serverId change produces different fingerprint', () => {
+      const fp1 = relayMaterialFingerprint({ ...relayA, serverId: 's1' });
+      const fp2 = relayMaterialFingerprint({ ...relayA, serverId: 's2' });
+      expect(fp1).not.toBe(fp2);
+    });
+
+    test('fingerprint does not contain grant', () => {
+      const fp = relayMaterialFingerprint(relayA, 'secret-grant-token-12345');
+      expect(fp).not.toContain('secret-grant-token-12345');
+      expect(fp).not.toContain('grant');
+      // Fingerprint is 8-char hex
+      expect(fp.length).toBe(8);
+      expect(/^[0-9a-f]{8}$/.test(fp)).toBe(true);
+    });
+
+    test('field boundary collision: "ab"|"c" vs "a"|"bc" differ', () => {
+      // Construct two relays where field values could collide without proper encoding
+      const r1 = { relayUrl: 'wss://ab.relay', serverId: 'c', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' } };
+      const r2 = { relayUrl: 'wss://a.relay', serverId: 'bc', hostEncPubJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' } };
+      const fp1 = relayMaterialFingerprint(r1);
+      const fp2 = relayMaterialFingerprint(r2);
+      expect(fp1).not.toBe(fp2);
+    });
+
+    test('grant update triggers different fingerprint (registry.replace path)', async () => {
+      const registry = createRelayTunnelRegistry({ createClient: () => makeFakeClient() });
+      const runtimeKey = toRuntimeKey('host_fp');
+
+      // First ensure with no grant
+      const descNoGrant: RelayRuntimeDescriptor = { ...relayA };
+      const clientV1 = await registry.ensure(runtimeKey, descNoGrant);
+
+      // Compute fingerprint with grant — must differ
+      const fpNoGrant = relayMaterialFingerprint(relayA);
+      const fpWithGrant = relayMaterialFingerprint(relayA, 'new-grant');
+      expect(fpNoGrant).not.toBe(fpWithGrant);
+
+      // Replace with grant — creates new client
+      const descWithGrant: RelayRuntimeDescriptor = { ...relayA, grant: 'new-grant' };
+      const clientV2 = await registry.replace(runtimeKey, descWithGrant);
+      expect(clientV2).not.toBe(clientV1);
+
+      registry.dispose();
+    });
   });
 });
