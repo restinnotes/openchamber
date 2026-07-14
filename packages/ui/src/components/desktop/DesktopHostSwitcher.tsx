@@ -49,7 +49,9 @@ const SSH_CONNECT_CANCELLED_ERROR = 'SSH connection cancelled';
 
 const runtimeKeyForHost = (host: DesktopHost): string => {
   if (host.id === LOCAL_HOST_ID) return 'local';
-  return `host:${host.id}`;
+  // Must match hostIdFromExistingId() format (host_${id}) so the active
+  // runtime and monitor use the same RelayRuntimeKey for the registry.
+  return `host_${host.id}`;
 };
 
 type HostStatus = {

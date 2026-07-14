@@ -4,10 +4,13 @@ import {
   activateRelayTunnel,
   deactivateRelayTunnel,
   getActiveRelayTunnel,
+  setRelayTunnelRegistry,
+  closeActiveRelayTunnel,
   type RelayRuntimeDescriptor,
 } from '@/lib/relay/runtime-tunnel';
+import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 
-export { getActiveRelayTunnel };
+export { getActiveRelayTunnel, setRelayTunnelRegistry, closeActiveRelayTunnel };
 
 export type RuntimeEndpointChangedDetail = {
   apiBaseUrl: string;
@@ -117,7 +120,13 @@ export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken
   // network. Activate the tunnel BEFORE minting the url token, since the mint
   // itself rides the tunnel (runtimeFetch -> tunnel.fetch).
   if (options.relay) {
-    activateRelayTunnel(options.relay);
+    // Pass the runtimeKey through so the registry can be consulted for a
+    // shared client (monitor + active runtime share the same client).
+    const descriptor: RelayRuntimeDescriptor = {
+      ...options.relay,
+      ...(runtimeKey ? { runtimeKey: toRuntimeKey(runtimeKey) } : {}),
+    };
+    activateRelayTunnel(descriptor);
   } else {
     deactivateRelayTunnel();
   }

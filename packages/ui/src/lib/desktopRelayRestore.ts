@@ -30,7 +30,7 @@ let candidateRefreshInFlight = false;
  */
 export const refreshDesktopHostCandidates = async (hostId: string): Promise<void> => {
   if (!isElectronShell() || candidateRefreshInFlight) return;
-  const runtimeKey = `host:${hostId}`;
+  const runtimeKey = `host_${hostId}`;
   // The candidates fetch rides the active runtime's transport — only meaningful
   // while this host IS the active runtime.
   if (getRuntimeKey() !== runtimeKey) return;
@@ -122,7 +122,7 @@ export const restoreDesktopRelayRuntime = async (targetHostId?: string): Promise
   const host = config.hosts.find((entry) => entry.id === hostId);
   if (!host?.relay) return;
   // Must match runtimeKeyForHost() in DesktopHostSwitcher so switch/resolve agree.
-  const runtimeKey = `host:${host.id}`;
+  const runtimeKey = `host_${host.id}`;
   if (getRuntimeKey() === runtimeKey) return;
 
   const switchToDirect = (url: string) => {

@@ -19,7 +19,7 @@ import {
 } from './activation-wiring';
 import { createRuntimeActivationAdapter } from './runtime-activation-adapter';
 import type { RuntimeSnapshot } from '../activation/types';
-import { getRuntimeKey, switchRuntimeEndpoint, subscribeRuntimeEndpointChanged } from '@/lib/runtime-switch';
+import { getRuntimeKey, switchRuntimeEndpoint, subscribeRuntimeEndpointChanged, setRelayTunnelRegistry, closeActiveRelayTunnel } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -28,6 +28,7 @@ import { MultiHostIntegrationContext, type MultiHostIntegrationContextValue } fr
 import { loadPersistedHostDescriptors, resolveRelayDescriptor, syncPersistedHosts } from './desktop-hosts-bridge';
 import { getRelayTunnelRegistry, disposeRelayTunnelRegistry } from './app-relay-registry';
 import { createCompositeTransportFactory } from './composite-transport-factory';
+import { subscribeDesktopHostsChanged } from '@/lib/desktop-hosts-change-notifier';
 
 // ---------------------------------------------------------------------------
 // Provider props
@@ -103,7 +104,7 @@ function createRealRuntimeActivationAdapter() {
         switchRuntimeEndpoint({
           apiBaseUrl: apiUrl,
           clientToken: undefined,
-          runtimeKey: `host:${host.hostId}`,
+          runtimeKey: `host_${host.hostId}`,
           requestHeaders: host.transport.requestHeaders,
           relay: null,
         });
@@ -196,9 +197,9 @@ function createRealRuntimeActivationAdapter() {
 // ---------------------------------------------------------------------------
 
 function extractHostIdFromRuntimeKey(runtimeKey: string): HostId | undefined {
-  // Runtime keys are formatted as "host:<hostId>" for remote hosts
-  // or "local" for the local instance
-  if (runtimeKey.startsWith('host:')) {
+  // Runtime keys are formatted as "host_${hostId}" for remote hosts
+  // (matching hostIdFromExistingId format) or "local" for the local instance.
+  if (runtimeKey.startsWith('host_')) {
     return runtimeKey.slice(5) as HostId;
   }
   // For local instance, return undefined (no hostId)
@@ -218,6 +219,13 @@ export function MultiHostIntegrationProvider({
 
   // Initialize relay tunnel registry (shared singleton)
   const relayRegistry = React.useMemo(() => getRelayTunnelRegistry(), []);
+
+  // Inject the registry into runtime-tunnel so activateRelayTunnel /
+  // getActiveRelayTunnel share the same client as the monitor.
+  React.useEffect(() => {
+    setRelayTunnelRegistry(relayRegistry);
+    return () => setRelayTunnelRegistry(null);
+  }, [relayRegistry]);
 
   // Create composite transport factory (handles relay + non-relay)
   const compositeTransportFactory = React.useMemo(() => {
@@ -247,6 +255,7 @@ export function MultiHostIntegrationProvider({
   // Cleanup on unmount
   React.useEffect(() => {
     return () => {
+      closeActiveRelayTunnel();
       disposeActivationWiring();
       disposeSupervisorLifecycle();
       disposeRelayTunnelRegistry();
@@ -278,16 +287,26 @@ export function MultiHostIntegrationProvider({
 
     // Periodic reconciliation (every 60s) to pick up external persistence changes
     // (e.g., another window adding/removing hosts). This is conservative —
-    // the main sync path is triggered by CRUD operations calling syncPersistedHosts.
+    // the main sync path is triggered by CRUD operations calling notifyDesktopHostsChanged.
     const reconciliationInterval = setInterval(() => {
       if (!cancelled) {
         syncPersistedHosts(supervisor);
       }
     }, 60_000);
 
+    // Immediate reconciliation on desktop hosts change notifications.
+    // This fires after desktopHostsSet() calls in the UI, so the supervisor
+    // picks up additions/deletions without waiting for the 60s interval.
+    const unsubscribeChanges = subscribeDesktopHostsChanged(() => {
+      if (!cancelled) {
+        syncPersistedHosts(supervisor);
+      }
+    });
+
     return () => {
       cancelled = true;
       clearInterval(reconciliationInterval);
+      unsubscribeChanges();
     };
   }, [supervisor]);
 

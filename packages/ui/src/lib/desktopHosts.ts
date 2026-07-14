@@ -1,5 +1,6 @@
 import { hasDesktopInvoke, invokeDesktop } from '@/lib/desktop';
 import { createRelayTunnelClient } from '@/lib/relay/tunnel-client';
+import { notifyDesktopHostsChanged } from '@/lib/desktop-hosts-change-notifier';
 
 type DesktopInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
@@ -268,6 +269,9 @@ export const desktopHostsSet = async (config: DesktopHostsConfigInput): Promise<
   await invoke('desktop_hosts_set', {
     input,
   });
+  // Notify subscribers (e.g., multi-host integration provider) so they can
+  // re-sync immediately instead of waiting for the 60s polling interval.
+  notifyDesktopHostsChanged();
 };
 
 export const desktopLocalClientTokenGet = async (): Promise<string> => {

@@ -14,8 +14,10 @@ import type { HostDescriptor, HostId, HostTransport } from '../types';
 import { hostIdFromExistingId } from '../host-registry';
 import { desktopHostsGet, type DesktopHost, type DesktopHostRelay } from '@/lib/desktopHosts';
 import type { RelayRuntimeDescriptor } from '@/lib/relay/multi-runtime/types';
+import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 import type { SupervisorLifecycle } from './supervisor-lifecycle';
 import { useMultiHostStore } from '../multi-host-store';
+import { getRelayTunnelRegistry } from './app-relay-registry';
 
 // ---------------------------------------------------------------------------
 // Relay material store
@@ -198,6 +200,12 @@ export async function syncPersistedHosts(
         // Host was deleted from persistence — stop monitoring and clean up
         supervisor.stopHost(hostId as HostId);
         useMultiHostStore.getState().removeHost(hostId as HostId);
+        // Close the registry entry for relay hosts to prevent leaked clients.
+        const existingDescriptor = currentStore.hosts[hostId]?.descriptor;
+        if (existingDescriptor?.transport.kind === 'relay') {
+          const registry = getRelayTunnelRegistry();
+          await registry.close(toRuntimeKey(hostId as HostId));
+        }
         removeRelayMaterial(hostId as HostId);
       }
     }
