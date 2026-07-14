@@ -1,7 +1,7 @@
 import { isElectronShell } from '@/lib/desktop';
 import { desktopHostProbe, desktopHostsGet, desktopHostsSet, getDesktopHostApiUrl, normalizeHostUrl } from '@/lib/desktopHosts';
 import { runtimeFetch } from '@/lib/runtime-fetch';
-import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { getRuntimeKey, switchRuntimeEndpoint, switchRuntimeEndpointAsync } from '@/lib/runtime-switch';
 
 // Let the post-switch bootstrap traffic settle before the background refresh.
 const CANDIDATE_REFRESH_DELAY_MS = 5_000;
@@ -133,8 +133,8 @@ export const restoreDesktopRelayRuntime = async (targetHostId?: string): Promise
       runtimeKey,
     });
   };
-  const switchToRelay = () => {
-    switchRuntimeEndpoint({
+  const switchToRelay = async () => {
+    await switchRuntimeEndpointAsync({
       apiBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
       clientToken: host.clientToken || null,
       runtimeKey,
@@ -148,7 +148,7 @@ export const restoreDesktopRelayRuntime = async (targetHostId?: string): Promise
 
   const directUrl = host.apiUrl ? normalizeHostUrl(getDesktopHostApiUrl(host)) : null;
   if (!directUrl) {
-    switchToRelay();
+    await switchToRelay();
     return;
   }
 
@@ -176,13 +176,13 @@ export const restoreDesktopRelayRuntime = async (targetHostId?: string): Promise
       switchToDirect(directUrl);
       return;
     }
-    switchToRelay();
+    await switchToRelay();
     return;
   }
 
   // Headstart expired: connect via relay now; adopt the direct transport if the
   // still-running probe succeeds a moment later.
-  switchToRelay();
+  await switchToRelay();
   void probePromise.then((probe) => {
     if (!probeOk(probe)) return;
     if (getRuntimeKey() !== runtimeKey) return; // user switched away meanwhile

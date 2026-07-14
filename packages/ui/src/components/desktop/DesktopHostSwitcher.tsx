@@ -35,7 +35,7 @@ import { scheduleDesktopHostCandidateRefresh } from '@/lib/desktopRelayRestore';
 import { adoptRelayTunnel } from '@/lib/relay/runtime-tunnel';
 import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 import { createRelayTunnelClient } from '@/lib/relay/tunnel-client';
-import { getRuntimeApiBaseUrl, getRuntimeKey, subscribeRuntimeEndpointChanged, switchRuntimeEndpoint } from '@/lib/runtime-switch';
+import { getRuntimeApiBaseUrl, getRuntimeKey, subscribeRuntimeEndpointChanged, switchRuntimeEndpoint, switchRuntimeEndpointAsync } from '@/lib/runtime-switch';
 import {
   desktopSshConnect,
   desktopSshDisconnect,
@@ -518,15 +518,15 @@ export function DesktopHostSwitcherDialog({
     // Relay legs ride the E2EE tunnel activated in-renderer via
     // switchRuntimeEndpoint({ relay }); the runtime fetch/socket layers route
     // through the tunnel from the singleton registry.
-    const activateRelay = (relay: NonNullable<DesktopHost['relay']>, liveTunnel?: ReturnType<typeof createRelayTunnelClient>) => {
+    const activateRelay = async (relay: NonNullable<DesktopHost['relay']>, liveTunnel?: ReturnType<typeof createRelayTunnelClient>) => {
       // Adopt the probe's live tunnel (when it kept one) BEFORE the switch: the
-      // activate call inside switchRuntimeEndpoint sees an equal descriptor and
-      // reuses it — no second WebSocket connect + E2EE handshake.
+      // activate call inside switchRuntimeEndpointAsync sees an equal descriptor
+      // and reuses it — no second WebSocket connect + E2EE handshake.
       if (liveTunnel) {
         const runtimeKey = toRuntimeKey(runtimeKeyForHost(host));
         adoptRelayTunnel({ relayUrl: relay.relayUrl, serverId: relay.serverId, hostEncPubJwk: relay.hostEncPubJwk, runtimeKey }, liveTunnel);
       }
-      switchRuntimeEndpoint({
+      await switchRuntimeEndpointAsync({
         apiBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
         clientToken: host.clientToken || null,
         runtimeKey: runtimeKeyForHost(host),
@@ -553,11 +553,11 @@ export function DesktopHostSwitcherDialog({
       const cached = statusById[host.id];
       if (cached?.status === 'ok') {
         if (cached.via === 'relay' && host.relay) {
-          activateRelay(host.relay);
+          await activateRelay(host.relay);
         } else if (apiOrigin) {
           switchRuntimeEndpoint({ apiBaseUrl: apiOrigin, clientToken: clientToken || null, requestHeaders: host.requestHeaders || null, runtimeKey: runtimeKeyForHost(host) });
         } else if (host.relay) {
-          activateRelay(host.relay);
+          await activateRelay(host.relay);
         }
         onHostSwitched?.();
         setSwitchingHostId(null);
@@ -592,7 +592,7 @@ export function DesktopHostSwitcherDialog({
         return;
       }
       if (transport === 'relay' && host.relay) {
-        activateRelay(host.relay, relayProbeTunnel);
+        await activateRelay(host.relay, relayProbeTunnel);
       } else {
         switchRuntimeEndpoint({ apiBaseUrl: apiOrigin, clientToken: clientToken || null, requestHeaders: host.requestHeaders || null, runtimeKey: runtimeKeyForHost(host) });
       }
