@@ -66,4 +66,6 @@ export {
   disposeActivationWiring,
   useSidebarIntegration,
   SidebarIntegration,
+  MultiHostIntegrationProvider,
+  useMultiHostIntegration,
 } from './integration';

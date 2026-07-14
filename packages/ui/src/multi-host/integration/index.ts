@@ -36,3 +36,15 @@ export {
   type SidebarIntegrationOptions,
   type SidebarIntegrationProps,
 } from './sidebar-integration';
+
+// -- Multi-host integration context -----------------------------------------
+export {
+  useMultiHostIntegration,
+  type MultiHostIntegrationContextValue,
+} from './multi-host-integration-context';
+
+// -- Multi-host integration provider ----------------------------------------
+export {
+  MultiHostIntegrationProvider,
+  type MultiHostIntegrationProviderProps,
+} from './multi-host-integration-provider';
