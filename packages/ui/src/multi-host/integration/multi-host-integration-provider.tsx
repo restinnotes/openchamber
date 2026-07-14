@@ -19,7 +19,7 @@ import {
 } from './activation-wiring';
 import { createRuntimeActivationAdapter } from './runtime-activation-adapter';
 import type { RuntimeSnapshot } from '../activation/types';
-import { getRuntimeKey, switchRuntimeEndpoint, subscribeRuntimeEndpointChanged, setRelayTunnelRegistry, closeActiveRelayTunnel } from '@/lib/runtime-switch';
+import { getRuntimeKey, switchRuntimeEndpoint, subscribeRuntimeEndpointChanged, setRelayTunnelRegistry, disposeRelayTunnels } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -255,10 +255,10 @@ export function MultiHostIntegrationProvider({
   // Cleanup on unmount
   React.useEffect(() => {
     return () => {
-      closeActiveRelayTunnel();
+      void disposeRelayTunnels();
       disposeActivationWiring();
       disposeSupervisorLifecycle();
-      disposeRelayTunnelRegistry();
+      void disposeRelayTunnelRegistry();
     };
   }, []);
 

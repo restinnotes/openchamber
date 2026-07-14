@@ -33,6 +33,7 @@ import {
 } from '@/lib/desktopHosts';
 import { scheduleDesktopHostCandidateRefresh } from '@/lib/desktopRelayRestore';
 import { adoptRelayTunnel } from '@/lib/relay/runtime-tunnel';
+import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 import { createRelayTunnelClient } from '@/lib/relay/tunnel-client';
 import { getRuntimeApiBaseUrl, getRuntimeKey, subscribeRuntimeEndpointChanged, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import {
@@ -522,7 +523,8 @@ export function DesktopHostSwitcherDialog({
       // activate call inside switchRuntimeEndpoint sees an equal descriptor and
       // reuses it — no second WebSocket connect + E2EE handshake.
       if (liveTunnel) {
-        adoptRelayTunnel({ relayUrl: relay.relayUrl, serverId: relay.serverId, hostEncPubJwk: relay.hostEncPubJwk }, liveTunnel);
+        const runtimeKey = toRuntimeKey(runtimeKeyForHost(host));
+        adoptRelayTunnel({ relayUrl: relay.relayUrl, serverId: relay.serverId, hostEncPubJwk: relay.hostEncPubJwk, runtimeKey }, liveTunnel);
       }
       switchRuntimeEndpoint({
         apiBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',

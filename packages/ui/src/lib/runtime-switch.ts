@@ -2,15 +2,15 @@ import { refreshRuntimeUrlAuthToken, setRuntimeBearerToken, setRuntimeExtraHeade
 import { configureRuntimeUrlResolver } from '@/lib/runtime-url';
 import {
   activateRelayTunnel,
-  deactivateRelayTunnel,
+  deactivateActiveRelayTunnel,
   getActiveRelayTunnel,
   setRelayTunnelRegistry,
-  closeActiveRelayTunnel,
+  disposeRelayTunnels,
   type RelayRuntimeDescriptor,
 } from '@/lib/relay/runtime-tunnel';
 import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
 
-export { getActiveRelayTunnel, setRelayTunnelRegistry, closeActiveRelayTunnel };
+export { getActiveRelayTunnel, setRelayTunnelRegistry, disposeRelayTunnels };
 
 export type RuntimeEndpointChangedDetail = {
   apiBaseUrl: string;
@@ -128,7 +128,7 @@ export const switchRuntimeEndpoint = (options: { apiBaseUrl: string; clientToken
     };
     activateRelayTunnel(descriptor);
   } else {
-    deactivateRelayTunnel();
+    deactivateActiveRelayTunnel();
   }
   void refreshRuntimeUrlAuthToken(apiBaseUrl).catch(() => {});
   if (typeof window !== 'undefined') {

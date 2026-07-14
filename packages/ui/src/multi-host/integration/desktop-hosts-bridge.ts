@@ -7,7 +7,8 @@
  *
  * Provides syncPersistedHosts() for runtime lifecycle synchronization:
  * diffs current supervisor state with persisted state and applies additions,
- * updates, and deletions.
+ * updates, and deletions. For relay hosts with changed connection material,
+ * calls registry.replace() to swap the tunnel client.
  */
 
 import type { HostDescriptor, HostId, HostTransport } from '../types';
@@ -15,6 +16,7 @@ import { hostIdFromExistingId } from '../host-registry';
 import { desktopHostsGet, type DesktopHost, type DesktopHostRelay } from '@/lib/desktopHosts';
 import type { RelayRuntimeDescriptor } from '@/lib/relay/multi-runtime/types';
 import { toRuntimeKey } from '@/lib/relay/multi-runtime/types';
+import { closeRelayTunnelForRuntime } from '@/lib/relay/runtime-tunnel';
 import type { SupervisorLifecycle } from './supervisor-lifecycle';
 import { useMultiHostStore } from '../multi-host-store';
 import { getRelayTunnelRegistry } from './app-relay-registry';
@@ -66,6 +68,19 @@ export function resolveRelayDescriptor(descriptor: HostDescriptor): RelayRuntime
     serverId: material.serverId,
     hostEncPubJwk: material.hostEncPubJwk,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Relay material fingerprint (for change detection)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute a lightweight fingerprint of relay connection material.
+ * Used to detect when relay material has changed between sync cycles.
+ * Does NOT log or expose sensitive descriptor values.
+ */
+function relayMaterialFingerprint(relay: DesktopHostRelay): string {
+  return `${relay.relayUrl}|${relay.serverId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +169,11 @@ export async function loadPersistedHostDescriptors(): Promise<
 // ---------------------------------------------------------------------------
 
 /**
+ * Track relay material fingerprints to detect changes between sync cycles.
+ */
+const previousRelayFingerprints = new Map<HostId, string>();
+
+/**
  * Sync the supervisor/store state with the latest persisted desktop hosts.
  *
  * This function:
@@ -161,6 +181,7 @@ export async function loadPersistedHostDescriptors(): Promise<
  * 2. Converts them to descriptors
  * 3. Diffs against the current supervisor state
  * 4. Applies additions, updates, and deletions
+ * 5. For relay hosts with changed material, calls registry.replace()
  *
  * Safe to call concurrently — uses the latest persisted state each time.
  * Idempotent — repeated calls with the same state are no-ops.
@@ -188,7 +209,11 @@ export async function syncPersistedHosts(
           JSON.stringify(existingDescriptor.transport) !== JSON.stringify(descriptor.transport);
 
         if (descriptorChanged) {
-          // Descriptor changed — restart with new descriptor
+          // Descriptor changed — restart with new descriptor.
+          // For relay hosts, also replace the registry client if material changed.
+          if (descriptor.transport.kind === 'relay') {
+            await replaceRelayClientIfNeeded(hostId, descriptor);
+          }
           supervisor.restartHost(hostId, descriptor);
         }
       }
@@ -203,13 +228,54 @@ export async function syncPersistedHosts(
         // Close the registry entry for relay hosts to prevent leaked clients.
         const existingDescriptor = currentStore.hosts[hostId]?.descriptor;
         if (existingDescriptor?.transport.kind === 'relay') {
-          const registry = getRelayTunnelRegistry();
-          await registry.close(toRuntimeKey(hostId as HostId));
+          await closeRelayTunnelForRuntime(toRuntimeKey(hostId as HostId));
         }
         removeRelayMaterial(hostId as HostId);
+        previousRelayFingerprints.delete(hostId as HostId);
       }
     }
   } catch {
     // Sync is best-effort — don't throw on failures
+  }
+}
+
+/**
+ * For relay hosts, check if the relay connection material has changed
+ * and replace the registry client if so. This ensures the active runtime
+ * and monitor get the new client for the updated relay.
+ *
+ * Failure here is isolated — it does NOT break other hosts or the
+ * restartHost call that follows.
+ */
+async function replaceRelayClientIfNeeded(
+  hostId: HostId,
+  newDescriptor: HostDescriptor,
+): Promise<void> {
+  if (newDescriptor.transport.kind !== 'relay') return;
+
+  const newRelayDescriptor = resolveRelayDescriptor(newDescriptor);
+  if (!newRelayDescriptor) return;
+
+  const newFingerprint = relayMaterialFingerprint({
+    relayUrl: newRelayDescriptor.relayUrl,
+    serverId: newRelayDescriptor.serverId,
+    hostEncPubJwk: newRelayDescriptor.hostEncPubJwk,
+  });
+
+  const oldFingerprint = previousRelayFingerprints.get(hostId);
+  if (oldFingerprint === newFingerprint) {
+    // Material unchanged — no replace needed.
+    return;
+  }
+
+  previousRelayFingerprints.set(hostId, newFingerprint);
+
+  // Replace the registry client (no-op if fingerprint matches internally).
+  try {
+    const registry = getRelayTunnelRegistry();
+    await registry.replace(toRuntimeKey(hostId), newRelayDescriptor);
+  } catch {
+    // Replace failure is isolated — the restartHost call will use the
+    // transport factory which also calls ensure(), recovering gracefully.
   }
 }
