@@ -25,6 +25,8 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { opencodeClient } from '@/lib/opencode/client';
 import { MultiHostIntegrationContext, type MultiHostIntegrationContextValue } from './multi-host-integration-context';
+import { loadPersistedHostDescriptors } from './desktop-hosts-bridge';
+import { useMultiHostStore } from '../multi-host-store';
 
 // ---------------------------------------------------------------------------
 // Provider props
@@ -234,13 +236,52 @@ export function MultiHostIntegrationProvider({
     };
   }, []);
 
-  // Subscribe to remote instance changes and sync with supervisor
+  // Load persisted remote instances and start monitoring on mount
   React.useEffect(() => {
-    // For now, enable multi-host only when there are remote instances
-    // In production, this would subscribe to the desktop hosts store
+    let cancelled = false;
+
+    const loadAndStartHosts = async () => {
+      try {
+        const descriptors = await loadPersistedHostDescriptors();
+        if (cancelled) return;
+
+        if (descriptors.size > 0) {
+          const monitorableHosts = new Map<
+            import('../types').HostId,
+            import('../types').HostDescriptor
+          >();
+
+          for (const [hostId, descriptor] of descriptors) {
+            if (descriptor.transport.kind === 'relay') {
+              // Register relay hosts in the store for sidebar display,
+              // but don't start monitoring — the default transport factory
+              // doesn't support relay. A relay transport factory would be
+              // injected by the relay integration layer when available.
+              useMultiHostStore.getState().registerHost(descriptor);
+            } else {
+              monitorableHosts.set(hostId, descriptor);
+            }
+          }
+
+          // startAll registers + monitors all non-relay hosts
+          supervisor.startAll(monitorableHosts);
+          setIsMultiHostEnabled(true);
+        }
+      } catch {
+        // Silently handle load failures — multi-host is best-effort
+      }
+    };
+
+    loadAndStartHosts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supervisor]);
+
+  // Subscribe to runtime endpoint changes to keep multi-host enabled
+  React.useEffect(() => {
     const unsubscribe = subscribeRuntimeEndpointChanged(() => {
-      // When the runtime endpoint changes, check if we have multiple hosts
-      // This is a simplified check - in production, this would query the hosts store
       setIsMultiHostEnabled(true);
     });
 

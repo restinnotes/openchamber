@@ -141,7 +141,14 @@ export function createMultiHostSupervisor(
 
   const startAll = (hosts: Map<HostId, HostDescriptor>): void => {
     for (const [hostId, descriptor] of hosts) {
-      startHost(hostId, descriptor);
+      try {
+        startHost(hostId, descriptor);
+      } catch {
+        // Skip hosts whose transport factory throws (e.g., relay without
+        // injected relay transport factory). The host is still registered
+        // in the store by startHost before the transport factory call, so
+        // it will appear in the sidebar even if monitoring can't start.
+      }
     }
   };
 
