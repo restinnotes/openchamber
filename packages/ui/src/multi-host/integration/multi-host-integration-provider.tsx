@@ -25,8 +25,9 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { opencodeClient } from '@/lib/opencode/client';
 import { MultiHostIntegrationContext, type MultiHostIntegrationContextValue } from './multi-host-integration-context';
-import { loadPersistedHostDescriptors } from './desktop-hosts-bridge';
-import { useMultiHostStore } from '../multi-host-store';
+import { loadPersistedHostDescriptors, resolveRelayDescriptor, syncPersistedHosts } from './desktop-hosts-bridge';
+import { getRelayTunnelRegistry, disposeRelayTunnelRegistry } from './app-relay-registry';
+import { createCompositeTransportFactory } from './composite-transport-factory';
 
 // ---------------------------------------------------------------------------
 // Provider props
@@ -215,10 +216,25 @@ export function MultiHostIntegrationProvider({
 }: MultiHostIntegrationProviderProps) {
   const [isMultiHostEnabled, setIsMultiHostEnabled] = React.useState(false);
 
-  // Initialize supervisor lifecycle (singleton)
+  // Initialize relay tunnel registry (shared singleton)
+  const relayRegistry = React.useMemo(() => getRelayTunnelRegistry(), []);
+
+  // Create composite transport factory (handles relay + non-relay)
+  const compositeTransportFactory = React.useMemo(() => {
+    if (transportFactory) {
+      // Custom transport factory provided — use it directly
+      return transportFactory;
+    }
+    return createCompositeTransportFactory({
+      registry: relayRegistry,
+      resolveDescriptor: resolveRelayDescriptor,
+    });
+  }, [transportFactory, relayRegistry]);
+
+  // Initialize supervisor lifecycle with composite transport
   const supervisor = React.useMemo(() => {
-    return getSupervisorLifecycle({ transportFactory });
-  }, [transportFactory]);
+    return getSupervisorLifecycle({ transportFactory: compositeTransportFactory });
+  }, [compositeTransportFactory]);
 
   // Initialize activation wiring with real adapter
   const activation = React.useMemo(() => {
@@ -233,38 +249,24 @@ export function MultiHostIntegrationProvider({
     return () => {
       disposeActivationWiring();
       disposeSupervisorLifecycle();
+      disposeRelayTunnelRegistry();
     };
   }, []);
 
-  // Load persisted remote instances and start monitoring on mount
+  // Load persisted remote instances and start monitoring ALL hosts on mount.
+  // Uses syncPersistedHosts for diff-based reconciliation.
   React.useEffect(() => {
     let cancelled = false;
 
-    const loadAndStartHosts = async () => {
+    const initialSync = async () => {
       try {
         const descriptors = await loadPersistedHostDescriptors();
         if (cancelled) return;
 
         if (descriptors.size > 0) {
-          const monitorableHosts = new Map<
-            import('../types').HostId,
-            import('../types').HostDescriptor
-          >();
-
-          for (const [hostId, descriptor] of descriptors) {
-            if (descriptor.transport.kind === 'relay') {
-              // Register relay hosts in the store for sidebar display,
-              // but don't start monitoring — the default transport factory
-              // doesn't support relay. A relay transport factory would be
-              // injected by the relay integration layer when available.
-              useMultiHostStore.getState().registerHost(descriptor);
-            } else {
-              monitorableHosts.set(hostId, descriptor);
-            }
-          }
-
-          // startAll registers + monitors all non-relay hosts
-          supervisor.startAll(monitorableHosts);
+          // Start monitoring ALL hosts (including relay) — the composite
+          // transport factory handles relay via the shared registry.
+          supervisor.startAll(descriptors);
           setIsMultiHostEnabled(true);
         }
       } catch {
@@ -272,10 +274,20 @@ export function MultiHostIntegrationProvider({
       }
     };
 
-    loadAndStartHosts();
+    initialSync();
+
+    // Periodic reconciliation (every 60s) to pick up external persistence changes
+    // (e.g., another window adding/removing hosts). This is conservative —
+    // the main sync path is triggered by CRUD operations calling syncPersistedHosts.
+    const reconciliationInterval = setInterval(() => {
+      if (!cancelled) {
+        syncPersistedHosts(supervisor);
+      }
+    }, 60_000);
 
     return () => {
       cancelled = true;
+      clearInterval(reconciliationInterval);
     };
   }, [supervisor]);
 
